@@ -8,6 +8,10 @@ The development of this repository was inspired by the paper "Towards an AI Co-S
 
 ## 🧩 System Architecture
 
+### Research context and gene tables
+
+You can provide a Markdown research context with a candidate gene list, or multiple CSV gene tables with a separate Markdown description for each table. See [context and gene table instructions](CONTEXT_AND_GENE_TABLE.md), including synthetic examples and local validation commands. A model-generated hypothesis is not a validated biomarker or therapeutic target.
+
 The system implements multiple specialized agents, each with a specific role in the scientific research process:
 
 1. **Base Agent** - Parent class for all agents, handles core LLM interactions
@@ -138,3 +142,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Inspired by the paper "Towards an AI Co-Scientist"
 - Built with OpenAI's LLM technologies
 - Leverages the LangChain framework
+

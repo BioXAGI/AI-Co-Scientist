@@ -9,13 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from .agents.agent_factory import AgentFactory
-from .tools.search_tool import SearchTool
-from .tools.reasoning_tool import ReasoningTool
-from .tools.citation_tool import CitationTool
 from .utils.logger import setup_logging
 from .utils.validators import validate_research_goal, validate_hypothesis
 from .utils.exceptions import ConfigError, ValidationError
+from .research_inputs import load_paths, load_multiple_paths, format_evidence, ensure_prompt_size
+from .gene_filter import filter_inputs
 
 from .config.config import (
     AGENT_DEFAULT_MODEL,
@@ -40,6 +38,10 @@ class AICoScientist:
         Args:
             config: Optional configuration dictionary to override defaults
         """
+        from .agents.agent_factory import AgentFactory
+        from .tools.search_tool import SearchTool
+        from .tools.reasoning_tool import ReasoningTool
+        from .tools.citation_tool import CitationTool
         # Initialize logger
         self.logger = setup_logging(log_level=LOG_LEVEL, log_to_file=LOG_TO_FILE)
         self.logger.info("Initializing AI Co-Scientist system")
@@ -84,6 +86,14 @@ class AICoScientist:
         self.hypotheses = []
         self.ranked_hypotheses = []
         self.final_report = None
+        self.research_inputs = None
+
+    def set_research_inputs(self, research_inputs):
+        """Set optional validated source material for all workflow agents."""
+        self.research_inputs = research_inputs
+
+    def _agent_goal(self):
+        return self.research_goal + format_evidence(self.research_inputs)
     
     def set_research_goal(self, goal: str) -> bool:
         """Set the research goal for the system.
@@ -136,7 +146,7 @@ class AICoScientist:
         )
         
         # Generate hypotheses
-        hypotheses = generation_agent.generate_hypotheses(self.research_goal, count=count)
+        hypotheses = generation_agent.generate_hypotheses(self._agent_goal(), count=count)
         
         # Validate hypotheses
         valid_hypotheses = []
@@ -175,7 +185,7 @@ class AICoScientist:
         
         # Rank hypotheses
         ranked_hypotheses = ranking_agent.rank_hypotheses(
-            self.research_goal,
+            self._agent_goal(),
             self.hypotheses
         )
         
@@ -217,20 +227,20 @@ class AICoScientist:
                 # Get feedback from reflection agent
                 feedback = reflection_agent.review_hypothesis(
                     hypothesis["hypothesis"],
-                    self.research_goal
+                    self._agent_goal()
                 )
                 
                 # Evolve hypothesis based on feedback
                 evolved = evolution_agent.evolve_hypothesis(
                     hypothesis["hypothesis"],
                     feedback,
-                    self.research_goal
+                    self._agent_goal()
                 )
                 
                 # Check proximity to research goal
                 proximity_result = proximity_agent.evaluate_proximity(
                     evolved["hypothesis"],
-                    self.research_goal
+                    self._agent_goal()
                 )
                 
                 # Update hypothesis with refined version if it's relevant
@@ -268,7 +278,7 @@ class AICoScientist:
         
         # Generate report
         report = meta_review_agent.generate_report(
-            self.research_goal,
+            self._agent_goal(),
             self.ranked_hypotheses,
             max_hypotheses=5  # Include top 5 hypotheses in report
         )
@@ -313,6 +323,10 @@ class AICoScientist:
         results = {
             "research_goal": self.research_goal,
             "configuration": self.config,
+            "input_provenance": self.research_inputs.get('provenance', {}) if self.research_inputs else {},
+            "input_warnings": self.research_inputs.get('warnings', []) if self.research_inputs else [],
+            "selection_summary": self.research_inputs.get('selection_summary', []) if self.research_inputs else [],
+            "selection_audit": self.research_inputs.get('selection_audit', []) if self.research_inputs else [],
             "hypotheses": {
                 "initial": self.hypotheses,
                 "ranked": self.ranked_hypotheses
@@ -332,7 +346,7 @@ class AICoScientist:
         self.logger.info(f"Saved research results to {results_file}")
         return str(results_file)
     
-    def run_full_workflow(self, research_goal: str, iterations: int = 3, output_dir: Optional[str] = None) -> Dict[str, Any]:
+    def run_full_workflow(self, research_goal: str, iterations: int = 3, output_dir: Optional[str] = None, research_inputs=None) -> Dict[str, Any]:
         """Run the complete research workflow from goal to final report.
         
         Args:
@@ -351,6 +365,7 @@ class AICoScientist:
         try:
             # Set research goal
             self.set_research_goal(research_goal)
+            self.set_research_inputs(research_inputs)
             
             # Generate hypotheses
             self.generate_hypotheses(count=7)  # Generate 7 initial hypotheses
@@ -373,6 +388,10 @@ class AICoScientist:
             # Return final results
             return {
                 "research_goal": self.research_goal,
+                "input_provenance": self.research_inputs.get('provenance', {}) if self.research_inputs else {},
+                "input_warnings": self.research_inputs.get('warnings', []) if self.research_inputs else [],
+                "selection_summary": self.research_inputs.get('selection_summary', []) if self.research_inputs else [],
+                "selection_audit": self.research_inputs.get('selection_audit', []) if self.research_inputs else [],
                 "hypotheses": self.ranked_hypotheses,
                 "report": self.final_report
             }
@@ -396,8 +415,35 @@ def main():
     parser.add_argument("--iterations", "-i", type=int, default=3, help="Number of refinement iterations")
     parser.add_argument("--output", "-o", type=str, help="Output directory for results")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--context-md", help="UTF-8 Markdown research context")
+    parser.add_argument("--genes-csv", help="UTF-8 CSV of gene-level statistics")
+    parser.add_argument("--gene-column", help="Exact gene identifier column (defaults to the first column)")
+    parser.add_argument("--table-csv", action="append", help="CSV table; repeat for each table")
+    parser.add_argument("--table-context-md", action="append", help="Table-specific Markdown; repeat in the same order as --table-csv")
+    parser.add_argument("--table-gene-column", action="append", help="Optional gene-column override for each table; '-' means use its first column")
+    parser.add_argument("--filter-json", help="JSON file with explicit column-based rules for each CSV table")
+    parser.add_argument("--validate-inputs", action="store_true", help="Validate files without starting an LLM or sending data")
     
     args = parser.parse_args()
+    try:
+        if args.table_csv or args.table_context_md or args.table_gene_column:
+            if args.genes_csv or args.gene_column:
+                parser.error('Do not mix --genes-csv/--gene-column with --table-csv/--table-gene-column')
+            research_inputs = load_multiple_paths(args.context_md, args.table_csv, args.table_context_md, args.table_gene_column, validate_size=not args.filter_json)
+        else:
+            research_inputs = load_paths(args.context_md, args.genes_csv, args.gene_column, validate_size=not args.filter_json)
+        if args.filter_json:
+            rules = json.loads(Path(args.filter_json).read_text(encoding='utf-8-sig'))
+            research_inputs, audit = filter_inputs(research_inputs, rules)
+            research_inputs['selection_audit'] = audit
+            ensure_prompt_size(research_inputs)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    if args.validate_inputs:
+        print(json.dumps({'provenance': research_inputs['provenance'], 'warnings': research_inputs['warnings'], 'selection_summary': research_inputs.get('selection_summary', []), 'selection_audit': research_inputs.get('selection_audit', [])}, indent=2))
+        return 0
+    if args.filter_json and not any(s['selected_rows'] for s in research_inputs.get('selection_summary', [])):
+        parser.error('No candidate rows passed the specified rules; adjust rules before generating hypotheses')
     
     # Configure logging level
     log_level = "DEBUG" if args.verbose else LOG_LEVEL
@@ -420,7 +466,8 @@ def main():
             results = acs.run_full_workflow(
                 research_goal=args.goal,
                 iterations=args.iterations,
-                output_dir=args.output
+                output_dir=args.output,
+                research_inputs=research_inputs
             )
             
             # Print summary results
@@ -452,4 +499,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
+

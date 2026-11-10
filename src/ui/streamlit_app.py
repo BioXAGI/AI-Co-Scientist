@@ -17,6 +17,8 @@ sys.path.insert(0, str(project_root))
 
 # Import directly from the main module to avoid circular imports
 from src.main import AICoScientist
+from src.research_inputs import load_multiple_inputs, ensure_prompt_size
+from src.gene_filter import filter_inputs
 from src.config.config import AGENT_DEFAULT_MODEL, AGENT_DEFAULT_TEMPERATURE
 
 
@@ -137,6 +139,39 @@ def run_app():
         value="To investigate the relationship between microbiome diversity and autoimmune disorders in urban populations",
         height=100
     )
+    with st.expander("Optional research context and gene statistics", expanded=True):
+        context_file = st.file_uploader("Common research context (Markdown)", type=['md', 'markdown', 'txt'])
+        count = st.number_input("Number of gene tables", min_value=0, max_value=10, value=1, step=1)
+        table_specs = []
+        for index in range(int(count)):
+            st.markdown(f"**Table {index + 1}**")
+            gene_file = st.file_uploader("Gene statistics (CSV)", type=['csv'], key=f'gene_table_{index}')
+            table_context = st.file_uploader("Context for this table (Markdown)", type=['md', 'markdown', 'txt'], key=f'table_context_{index}')
+            gene_column = st.text_input("Gene identifier column (optional)", key=f'gene_column_{index}', help="The first column is used by default. Enter an exact column name to override it.")
+            if gene_file or table_context:
+                table_specs.append({'table_bytes': gene_file.getvalue() if gene_file else None, 'table_name': gene_file.name if gene_file else None, 'context_bytes': table_context.getvalue() if table_context else None, 'context_name': table_context.name if table_context else None, 'gene_column': gene_column.strip() or None})
+        filter_text = st.text_area("Selection rules (JSON, optional)", height=120, help='Provide rules by table ID, e.g. {"table_1":{"combine":"all","conditions":[{"column":"adjusted_fdr","op":"lt","value":0.05}]}}. Leave blank to send all rows.')
+        st.caption("Contexts and selected rows are sent to the model. If no selection rules are supplied, all rows are sent. Do not upload identifiable patient data.")
+        def prepare_inputs():
+            payload = load_multiple_inputs(context_file.getvalue() if context_file else None, context_file.name if context_file else None, table_specs, validate_size=not bool(filter_text.strip()))
+            if filter_text.strip():
+                payload, audit = filter_inputs(payload, json.loads(filter_text))
+                payload['selection_audit'] = audit
+                ensure_prompt_size(payload)
+            return payload
+        if st.button('Preview input selection'):
+            try:
+                preview = prepare_inputs()
+                if filter_text.strip():
+                    st.write('Selection summary', preview.get('selection_summary', []))
+                    st.dataframe(pd.DataFrame([{k:v for k,v in row.items() if k != 'condition_results'} for row in preview['selection_audit']]), use_container_width=True)
+                    st.download_button('Download selection audit', json.dumps({'selection_summary': preview['selection_summary'], 'selection_audit': preview['selection_audit']}, ensure_ascii=False, indent=2), file_name='gene_selection_audit.json', mime='application/json')
+                else:
+                    st.write('All rows will be sent.', preview['provenance'])
+                for warning in preview['warnings']:
+                    st.warning(warning)
+            except (OSError, ValueError) as exc:
+                st.error(str(exc))
     
     col1, col2 = st.columns([1, 3])
     
@@ -158,10 +193,16 @@ def run_app():
         progress_bar = st.progress(0, "Initializing...")
         
         try:
+            source_material = prepare_inputs()
+            if filter_text.strip() and not any(x['selected_rows'] for x in source_material.get('selection_summary', [])):
+                raise ValueError('No candidate rows passed the specified rules; adjust rules before generating hypotheses.')
+            for warning in source_material['warnings']:
+                st.warning(warning)
             # 1. Set research goal and update progress
             st.session_state.status = "setting_goal"
             progress_bar.progress(10, "Setting research goal...")
             st.session_state.acs.set_research_goal(research_goal)
+            st.session_state.acs.set_research_inputs(source_material)
             st.session_state.progress = 10
             
             # 2. Generate hypotheses
@@ -197,6 +238,10 @@ def run_app():
             # 6. Store results
             st.session_state.results = {
                 "research_goal": research_goal,
+                "input_provenance": source_material['provenance'],
+                "input_warnings": source_material['warnings'],
+                "selection_summary": source_material.get('selection_summary', []),
+                "selection_audit": source_material.get('selection_audit', []),
                 "hypotheses": ranked,
                 "report": report
             }
@@ -319,3 +364,4 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
+

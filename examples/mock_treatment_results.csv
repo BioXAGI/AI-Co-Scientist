@@ -1,0 +1,4 @@
+gene,interaction_hr,interaction_p,interaction_fdr,sample_size,study_label
+IL20RA,0.71,0.04,0.24,160,synthetic-treatment-study
+TGFB1,1.23,0.38,0.58,160,synthetic-treatment-study
+IL10RB,0.88,0.63,0.77,160,synthetic-treatment-study
