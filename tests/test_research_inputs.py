@@ -93,10 +93,10 @@ class ResearchInputsTests(unittest.TestCase):
         self.assertIn('do not apply one table definition', format_evidence(p))
 
     def test_context_only_gene_groups_reach_agents(self):
-        context = b'Unfavorable: MMP9, GPC1. Favorable: IL2, TNF.'
+        context = b'Unfavorable: MMP9, FAP. Favorable: IL2, TNF.'
         for p in (load_inputs(context_bytes=context), load_multiple_inputs(common_context_bytes=context)):
             prompt = format_evidence(p)
-            for gene in ('MMP9', 'GPC1', 'IL2', 'TNF'):
+            for gene in ('MMP9', 'FAP', 'IL2', 'TNF'):
                 self.assertIn(gene, prompt)
             self.assertIn('favorable or unfavorable', prompt)
             self.assertIn('Do not treat these labels as independently validated', prompt)

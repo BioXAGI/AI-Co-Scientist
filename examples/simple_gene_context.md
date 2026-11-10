@@ -8,7 +8,7 @@ Generate testable hypotheses about these genes as potential prognostic biomarker
 
 ## Candidate genes
 
-- **Unfavorable group:** MMP9, GPC1.
+- **Unfavorable group:** MMP9, FAP.
 - **Favorable group:** IL2, TNF.
 
 For this example, the labels refer to a hypothetical association with overall survival. The precise expression comparison, statistical estimates, cohort and covariates have not been supplied. Do not invent them, assume a direction of expression, or claim these genes are proven targets.

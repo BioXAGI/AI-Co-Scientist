@@ -22,7 +22,7 @@ Remove `--validate-inputs` and add `--goal "To evaluate candidate colorectal can
 
 The program enforces the filter; an LLM cannot change which table rows pass it. The agents still may misinterpret selected rows, invent unsupported claims, or mention genes from other context, so review their output and citations. The rules do not assess clinical validity, causality, or target feasibility. The existing 1 MB per-file limit still applies; filtering may reduce inputs below the prompt-size limit but does not remove that per-file limit.
 
-For the simplest starting point, provide a gene list directly in Markdown: see `examples/simple_gene_context.md`. Its MMP9/GPC1 unfavorable and IL2/TNF favorable groups are illustrative user-provided assumptions, not validated findings. No CSV is required. Supply the outcome, cohort, comparison and evidence when available; the agents should flag these as missing rather than inventing them.
+For the simplest starting point, provide a gene list directly in Markdown: see `examples/simple_gene_context.md`. Its MMP9/FAP unfavorable and IL2/TNF favorable groups are illustrative user-provided assumptions, not validated findings. No CSV is required. Supply the outcome, cohort, comparison and evidence when available; the agents should flag these as missing rather than inventing them.
 
 ```
 python -m src.main --context-md examples/simple_gene_context.md --validate-inputs
