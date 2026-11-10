@@ -17,6 +17,7 @@ sys.path.insert(0, str(project_root))
 
 # Import directly from the main module to avoid circular imports
 from src.main import AICoScientist
+from src.research_inputs import load_multiple_inputs
 from src.config.config import AGENT_DEFAULT_MODEL, AGENT_DEFAULT_TEMPERATURE
 
 
@@ -137,6 +138,18 @@ def run_app():
         value="To investigate the relationship between microbiome diversity and autoimmune disorders in urban populations",
         height=100
     )
+    with st.expander("Optional research context and gene statistics", expanded=True):
+        context_file = st.file_uploader("Common research context (Markdown)", type=['md', 'markdown', 'txt'])
+        count = st.number_input("Number of gene tables", min_value=0, max_value=10, value=1, step=1)
+        table_specs = []
+        for index in range(int(count)):
+            st.markdown(f"**Table {index + 1}**")
+            gene_file = st.file_uploader("Gene statistics (CSV)", type=['csv'], key=f'gene_table_{index}')
+            table_context = st.file_uploader("Context for this table (Markdown)", type=['md', 'markdown', 'txt'], key=f'table_context_{index}')
+            gene_column = st.text_input("Gene identifier column (optional)", key=f'gene_column_{index}', help="The first column is used by default. Enter an exact column name to override it.")
+            if gene_file or table_context:
+                table_specs.append({'table_bytes': gene_file.getvalue() if gene_file else None, 'table_name': gene_file.name if gene_file else None, 'context_bytes': table_context.getvalue() if table_context else None, 'context_name': table_context.name if table_context else None, 'gene_column': gene_column.strip() or None})
+        st.caption("The complete supplied files are sent to the selected model when you run the workflow. Do not upload identifiable patient data. Gene rows describe associations, not proven drug targets.")
     
     col1, col2 = st.columns([1, 3])
     
@@ -158,10 +171,14 @@ def run_app():
         progress_bar = st.progress(0, "Initializing...")
         
         try:
+            source_material = load_multiple_inputs(context_file.getvalue() if context_file else None, context_file.name if context_file else None, table_specs)
+            for warning in source_material['warnings']:
+                st.warning(warning)
             # 1. Set research goal and update progress
             st.session_state.status = "setting_goal"
             progress_bar.progress(10, "Setting research goal...")
             st.session_state.acs.set_research_goal(research_goal)
+            st.session_state.acs.set_research_inputs(source_material)
             st.session_state.progress = 10
             
             # 2. Generate hypotheses
@@ -197,6 +214,8 @@ def run_app():
             # 6. Store results
             st.session_state.results = {
                 "research_goal": research_goal,
+                "input_provenance": source_material['provenance'],
+                "input_warnings": source_material['warnings'],
                 "hypotheses": ranked,
                 "report": report
             }
@@ -319,3 +338,4 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
+

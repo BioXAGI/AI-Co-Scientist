@@ -3,10 +3,11 @@
 __version__ = "0.1.0"
 __author__ = "AI Co-Scientist Team"
 
-# Import AICoScientist class after all dependencies are loaded
-from .main import AICoScientist as _AICoScientist
-
-# Export AICoScientist
-AICoScientist = _AICoScientist
+def __getattr__(name):
+    if name == 'AICoScientist':
+        from .main import AICoScientist
+        return AICoScientist
+    raise AttributeError(name)
 
 __all__ = ['AICoScientist']
+
