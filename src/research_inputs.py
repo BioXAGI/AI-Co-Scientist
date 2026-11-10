@@ -34,7 +34,7 @@ def _decode(raw, filename):
     except UnicodeDecodeError as exc:
         raise ValueError(f'{filename}: expected UTF-8 text') from exc
 
-def load_inputs(context_bytes=None, context_name=None, table_bytes=None, table_name=None, gene_column=None):
+def load_inputs(context_bytes=None, context_name=None, table_bytes=None, table_name=None, gene_column=None, validate_size=True):
     """Return prompt-ready data and provenance without silently dropping rows."""
     payload = {'context': None, 'table': None, 'provenance': {}, 'warnings': []}
     if context_bytes is not None:
@@ -87,39 +87,37 @@ def load_inputs(context_bytes=None, context_name=None, table_bytes=None, table_n
             raise ValueError('Gene table contains no data rows')
         payload['table'] = {'columns': columns, 'gene_column': gene_column, 'rows': rows}
         payload['provenance']['table'] = {'filename': table_name, 'sha256': hashlib.sha256(table_bytes).hexdigest(), 'bytes': len(table_bytes), 'row_count': len(rows), 'columns': columns, 'gene_column': gene_column}
-    prompt = format_evidence(payload)
-    if len(prompt) > MAX_PROMPT_CHARS:
-        raise ValueError(f'Inputs total {len(prompt):,} prompt characters; limit is {MAX_PROMPT_CHARS:,}. Filter the file explicitly or raise the documented limit; no rows were silently removed.')
+    if validate_size:
+        ensure_prompt_size(payload)
     return payload
 
-def load_paths(context_path=None, table_path=None, gene_column=None):
+def load_paths(context_path=None, table_path=None, gene_column=None, validate_size=True):
     context = Path(context_path) if context_path else None
     table = Path(table_path) if table_path else None
-    return load_inputs(context.read_bytes() if context else None, context.name if context else None, table.read_bytes() if table else None, table.name if table else None, gene_column)
+    return load_inputs(context.read_bytes() if context else None, context.name if context else None, table.read_bytes() if table else None, table.name if table else None, gene_column, validate_size)
 
-def load_multiple_inputs(common_context_bytes=None, common_context_name=None, table_specs=None):
+def load_multiple_inputs(common_context_bytes=None, common_context_name=None, table_specs=None, validate_size=True):
     """Load ordered table/context pairs, with independent identifiers and hashes.
 
     Each spec has table_bytes, table_name, context_bytes, context_name and optional gene_column.
     A table-specific Markdown description is mandatory so that contexts cannot be mismatched silently.
     """
-    common = load_inputs(context_bytes=common_context_bytes, context_name=common_context_name)
+    common = load_inputs(context_bytes=common_context_bytes, context_name=common_context_name, validate_size=False)
     combined = {'common_context': common['context'], 'datasets': [],
                 'provenance': {'common_context': common['provenance'].get('context'), 'datasets': []}, 'warnings': []}
     for index, spec in enumerate(table_specs or [], 1):
         if spec.get('table_bytes') is None or spec.get('context_bytes') is None:
             raise ValueError(f'Table {index}: both a CSV and its own Markdown context are required')
-        parsed = load_inputs(spec['context_bytes'], spec.get('context_name'), spec['table_bytes'], spec.get('table_name'), spec.get('gene_column'))
+        parsed = load_inputs(spec['context_bytes'], spec.get('context_name'), spec['table_bytes'], spec.get('table_name'), spec.get('gene_column'), validate_size=False)
         ident = f'table_{index}'
         combined['datasets'].append({'dataset_id': ident, 'table_name': spec.get('table_name'), 'context_name': spec.get('context_name'), 'markdown_context': parsed['context'], 'gene_table': parsed['table']})
         combined['provenance']['datasets'].append({'dataset_id': ident, **parsed['provenance']})
         combined['warnings'].extend(f"{ident} ({spec.get('table_name') or 'CSV'}): {w}" for w in parsed['warnings'])
-    prompt = format_evidence(combined)
-    if len(prompt) > MAX_PROMPT_CHARS:
-        raise ValueError(f'Combined inputs total {len(prompt):,} prompt characters; limit is {MAX_PROMPT_CHARS:,}. No rows were silently removed.')
+    if validate_size:
+        ensure_prompt_size(combined)
     return combined
 
-def load_multiple_paths(common_context_path=None, table_paths=None, table_context_paths=None, gene_columns=None):
+def load_multiple_paths(common_context_path=None, table_paths=None, table_context_paths=None, gene_columns=None, validate_size=True):
     tables = table_paths or []
     contexts = table_context_paths or []
     if len(tables) != len(contexts):
@@ -132,7 +130,12 @@ def load_multiple_paths(common_context_path=None, table_paths=None, table_contex
         column = gene_columns[i] if gene_columns else None
         specs.append({'table_bytes': t.read_bytes(), 'table_name': t.name, 'context_bytes': c.read_bytes(), 'context_name': c.name, 'gene_column': None if column == '-' else column})
     common = Path(common_context_path) if common_context_path else None
-    return load_multiple_inputs(common.read_bytes() if common else None, common.name if common else None, specs)
+    return load_multiple_inputs(common.read_bytes() if common else None, common.name if common else None, specs, validate_size)
+
+def ensure_prompt_size(payload):
+    size = len(format_evidence(payload))
+    if size > MAX_PROMPT_CHARS:
+        raise ValueError(f'Inputs total {size:,} prompt characters; limit is {MAX_PROMPT_CHARS:,}. Filter the file explicitly or raise the documented limit; no rows were silently removed.')
 
 def format_evidence(payload):
     if payload and 'datasets' in payload:
@@ -147,6 +150,7 @@ def format_evidence(payload):
                 'Distinguish prognostic association from predictive treatment biomarkers and causal or druggable targets. '
                 'Do not infer causation, treatment benefit, effect direction, clinical validity, adjustment, or significance if not provided. '
                 'For hazard ratios state outcome, reference group, model, confidence interval and multiplicity status only when supplied. '
+                'Use only retained rows as table candidates; an empty filtered table supplies no candidates. Do not invent excluded genes. '
                 'Separate supplied facts from hypotheses and flag missing information.\n'
                 + json.dumps({'common_context': payload.get('common_context'), 'datasets': payload['datasets'], 'validation_warnings': payload.get('warnings')}, ensure_ascii=False))
     if not payload or (payload.get('context') is None and payload.get('table') is None):
@@ -158,5 +162,6 @@ def format_evidence(payload):
             'Distinguish prognostic association from predictive treatment biomarker and causal/druggable target. '
             'Do not infer causation, treatment benefit, effect direction, clinical validity or significance when missing or unspecified. '
             'For hazard ratios report the outcome, reference group, model, confidence interval and multiple-testing status only when supplied. '
+            'Use only retained rows as table candidates; an empty filtered table supplies no candidates. Do not invent excluded genes. '
             'Flag missing cohort metadata and propose independent validation; distinguish measured facts from hypotheses.\n'
-            + json.dumps({'markdown_context': payload.get('context'), 'gene_table': payload.get('table'), 'validation_warnings': payload.get('warnings')}, ensure_ascii=False))
+            + json.dumps({'markdown_context': payload.get('context'), 'gene_table': payload.get('table'), 'selection': payload.get('selection'), 'validation_warnings': payload.get('warnings')}, ensure_ascii=False))

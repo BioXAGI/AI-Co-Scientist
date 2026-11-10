@@ -6,6 +6,22 @@ The project accepts an optional common Markdown context and multiple gene statis
 
 The context should describe cancer, cohort, sample size, assay, endpoints, analysis model, covariates, expression comparison, confidence intervals, multiple-testing adjustment, and validation needs. See `examples/research_context.md`. `examples/example_genes.csv` uses real gene symbols but entirely fictional statistical values for demonstration only.
 
+## Select candidates using table columns
+
+You can provide explicit filtering rules to select candidate gene rows from each CSV before the model runs. Rules operate on CSV columns, not by matching a gene list in Markdown. The table-specific Markdown still tells the agent how to interpret the selected statistics. Each table receives its own rules; conditions within a table are combined with `all` (AND) or `any` (OR). There is no automatic choice of significance threshold or Cox model.
+
+For example, `examples/mock_filter_rules.json` selects table 1 rows with `cox_adjusted_hr > 1.2` AND `cox_adjusted_fdr < 0.2`; it selects table 2 rows with `interaction_p < 0.5`. These thresholds and values are fictional examples, not scientific recommendations. Numeric comparisons accept `lt`, `le`, `gt`, `ge`; `eq`, `ne` and `in` support exact values. Missing, nonnumeric or nonfinite values do not pass the relevant condition. A filter using the gene identifier column is not permitted. Refer to column names exactly as they appear in each CSV. To include favorable and unfavorable candidates, use `any` with independent comparisons or provide separate table-specific analyses; do not infer interpretation without the context.
+
+Check the candidate genes and row-level decisions locally without calling a model:
+
+```
+python -m src.main --table-csv examples/example_genes.csv --table-context-md examples/research_context.md --table-csv examples/mock_treatment_results.csv --table-context-md examples/mock_treatment_context.md --filter-json examples/mock_filter_rules.json --validate-inputs
+```
+
+Remove `--validate-inputs` and add `--goal "To evaluate candidate colorectal cancer biomarkers" --output results` to send the retained rows and their contexts to the agents. Every table must have an explicit rule when filtering is enabled. Invalid or missing rules fail rather than selecting all rows. The preview lists selected and excluded genes with the observed values, reasons and source rows. Saved workflow JSON includes rules and the row-level audit; source table and Markdown filenames and hashes remain in provenance. If no row is selected across the tables, validation reports this and the live workflow stops. In the UI, enter a JSON rule object and select “Preview input selection”; the audit can be downloaded before generation. Without a rule object, all supplied table rows are sent (subject to the prompt limit).
+
+The program enforces the filter; an LLM cannot change which table rows pass it. The agents still may misinterpret selected rows, invent unsupported claims, or mention genes from other context, so review their output and citations. The rules do not assess clinical validity, causality, or target feasibility. The existing 1 MB per-file limit still applies; filtering may reduce inputs below the prompt-size limit but does not remove that per-file limit.
+
 For the simplest starting point, provide a gene list directly in Markdown: see `examples/simple_gene_context.md`. Its MMP9/GPC1 unfavorable and IL2/TNF favorable groups are illustrative user-provided assumptions, not validated findings. No CSV is required. Supply the outcome, cohort, comparison and evidence when available; the agents should flag these as missing rather than inventing them.
 
 ```
@@ -33,7 +49,7 @@ Validate files locally, without sending them to a model:
 python -m src.main --context-md examples/research_context.md --genes-csv examples/example_genes.csv --validate-inputs
 ```
 
-Generate hypotheses (requires dependencies, model access, and an API key; this sends the complete input files to the configured model):
+Generate hypotheses (requires dependencies, model access, and an API key; without filtering this sends all input rows to the configured model):
 
 ```
 python -m src.main --goal "To evaluate candidate colorectal cancer prognostic biomarkers and potential targets" --context-md path/to/context.md --genes-csv path/to/genes.csv --gene-column gene --output results

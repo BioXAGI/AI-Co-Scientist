@@ -1,0 +1,15 @@
+{
+  "table_1": {
+    "combine": "all",
+    "conditions": [
+      {"column": "cox_adjusted_hr", "op": "gt", "value": 1.2},
+      {"column": "cox_adjusted_fdr", "op": "lt", "value": 0.2}
+    ]
+  },
+  "table_2": {
+    "combine": "all",
+    "conditions": [
+      {"column": "interaction_p", "op": "lt", "value": 0.5}
+    ]
+  }
+}

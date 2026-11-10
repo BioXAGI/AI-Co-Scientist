@@ -17,7 +17,8 @@ sys.path.insert(0, str(project_root))
 
 # Import directly from the main module to avoid circular imports
 from src.main import AICoScientist
-from src.research_inputs import load_multiple_inputs
+from src.research_inputs import load_multiple_inputs, ensure_prompt_size
+from src.gene_filter import filter_inputs
 from src.config.config import AGENT_DEFAULT_MODEL, AGENT_DEFAULT_TEMPERATURE
 
 
@@ -149,7 +150,28 @@ def run_app():
             gene_column = st.text_input("Gene identifier column (optional)", key=f'gene_column_{index}', help="The first column is used by default. Enter an exact column name to override it.")
             if gene_file or table_context:
                 table_specs.append({'table_bytes': gene_file.getvalue() if gene_file else None, 'table_name': gene_file.name if gene_file else None, 'context_bytes': table_context.getvalue() if table_context else None, 'context_name': table_context.name if table_context else None, 'gene_column': gene_column.strip() or None})
-        st.caption("The complete supplied files are sent to the selected model when you run the workflow. Do not upload identifiable patient data. Gene rows describe associations, not proven drug targets.")
+        filter_text = st.text_area("Selection rules (JSON, optional)", height=120, help='Provide rules by table ID, e.g. {"table_1":{"combine":"all","conditions":[{"column":"adjusted_fdr","op":"lt","value":0.05}]}}. Leave blank to send all rows.')
+        st.caption("Contexts and selected rows are sent to the model. If no selection rules are supplied, all rows are sent. Do not upload identifiable patient data.")
+        def prepare_inputs():
+            payload = load_multiple_inputs(context_file.getvalue() if context_file else None, context_file.name if context_file else None, table_specs, validate_size=not bool(filter_text.strip()))
+            if filter_text.strip():
+                payload, audit = filter_inputs(payload, json.loads(filter_text))
+                payload['selection_audit'] = audit
+                ensure_prompt_size(payload)
+            return payload
+        if st.button('Preview input selection'):
+            try:
+                preview = prepare_inputs()
+                if filter_text.strip():
+                    st.write('Selection summary', preview.get('selection_summary', []))
+                    st.dataframe(pd.DataFrame([{k:v for k,v in row.items() if k != 'condition_results'} for row in preview['selection_audit']]), use_container_width=True)
+                    st.download_button('Download selection audit', json.dumps({'selection_summary': preview['selection_summary'], 'selection_audit': preview['selection_audit']}, ensure_ascii=False, indent=2), file_name='gene_selection_audit.json', mime='application/json')
+                else:
+                    st.write('All rows will be sent.', preview['provenance'])
+                for warning in preview['warnings']:
+                    st.warning(warning)
+            except (OSError, ValueError) as exc:
+                st.error(str(exc))
     
     col1, col2 = st.columns([1, 3])
     
@@ -171,7 +193,9 @@ def run_app():
         progress_bar = st.progress(0, "Initializing...")
         
         try:
-            source_material = load_multiple_inputs(context_file.getvalue() if context_file else None, context_file.name if context_file else None, table_specs)
+            source_material = prepare_inputs()
+            if filter_text.strip() and not any(x['selected_rows'] for x in source_material.get('selection_summary', [])):
+                raise ValueError('No candidate rows passed the specified rules; adjust rules before generating hypotheses.')
             for warning in source_material['warnings']:
                 st.warning(warning)
             # 1. Set research goal and update progress
@@ -216,6 +240,8 @@ def run_app():
                 "research_goal": research_goal,
                 "input_provenance": source_material['provenance'],
                 "input_warnings": source_material['warnings'],
+                "selection_summary": source_material.get('selection_summary', []),
+                "selection_audit": source_material.get('selection_audit', []),
                 "hypotheses": ranked,
                 "report": report
             }
